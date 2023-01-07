@@ -1,37 +1,44 @@
-import utime                            #для работы со временем в micropython
-from machine import Pin, PWM            #для работы с пинами
+from machine import Pin, PWM
+from time import sleep
+import machine
+import time
+
+class HCSR04:
+    def __init__(self, trigger_pin, echo_pin, echo_timeout_us):
+        self.echo_timeout_us = echo_timeout_us
+        self.trigger = Pin(trigger_pin, mode=Pin.OUT, pull=None)
+        self.trigger.value(0)
+        self.echo = Pin(echo_pin, mode=Pin.IN, pull=None)
+        self.led = PWM(Pin(26), 5000)
+        self.led.duty(0)
+
+    def _send_pulse_and_wait(self):
+        self.trigger.value(0)  # Stabilize the sensor
+        time.sleep_us(5)
+        self.trigger.value(1)
+        time.sleep_us(10)
+        self.trigger.value(0)
+        try:
+            pulse_time = machine.time_pulse_us(self.echo, 1, self.echo_timeout_us)
+            return pulse_time
+        except OSError as ex:
+            if ex.args[0] == 110:  # 110 = истекло время подключения
+                raise OSError('ETIMEDOUT: Connection timed out')
+            raise ex
+
+    def distance_cm(self):
+        pulse_time = self._send_pulse_and_wait()
+        cms = (pulse_time / 2) / 29.1
+        if cms < 10.0:  # если растояние меньше 10 см
+            self.led.duty(1023)  # включаем лампочку
+        else:  # иначе
+            self.led.duty(0)
+        return cms
 
 
-frequency = 5000                        #частота для светодиода
-trig = Pin(13, Pin.OUT)                 #тригер для датчика HC-SR04
-echo = Pin(12, Pin.IN)                  #ответ от датчика HC-SR04
-led = PWM(Pin(26), frequency)           #ШИМ для светодиода с указанием пина и частоты
+esp32 = HCSR04(trigger_pin=13, echo_pin=12, echo_timeout_us=10000)
 
-while True:                             #запускаем бесконечный цикл
-    temp = 0                            #переменная для записи жуточного значения расстояния
-    cm = 0                              #растояние до объекта в сантиметрах
-    for n in range(10):                 #для точности вычисления посчитаем среднее значение за 10 итераций
-        trig.off()                      #устанавливаем триггер в нулевое положение
-        utime.sleep_ms(2)               #ждем 2 мс
-        trig.on()                       #запускаем триггер
-        utime.sleep_ms(10)              #по документации, триггер должен работать 10 мс
-        trig.off()                      #выключаем триггер
-
-        while echo.value() == 0:        #пока не получили логический сигнал единица
-            pass                        #ждем его получение, pass это комада - бездельник
-        time1 = utime.ticks_us()        #время старта
-
-        while echo.value() == 1:        #пока логическая единица не стала нулем
-            pass                        #опять же бездельничаем
-        time2 = utime.ticks_us()        #время конца
-
-        temp = (time2 - time1)/58.8     #время работы. Т.к. звук проходит 1 см за 58.8 микросекунды, получим растояние поделив время на коэффициент
-        cm += temp                      #сумируем время для повышения точности
-
-    cm = (cm/10)/2                      #т.к. цикл отработал 10 итераций, поделим сумму 10 значений на 10. Т.к. звук сначала идет к объекту, а потом от него на датчик, поделим на 2
-    print(cm)                           #печатаем растояние для наглядности
-    if cm < 5.0:                        #если растояние меньше 5 см
-        led.duty(1023)                  #включаем лампочку
-    else:                               #иначе
-        led.duty(0)                      #выключаем
-    utime.sleep(2)                      #2 секунды перед следующей итерации чтобы печать не летала
+while True:
+    distance = esp32.distance_cm()
+    print('Distance:', distance, 'cm')
+    sleep(1)
